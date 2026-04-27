@@ -101,8 +101,16 @@ def _collect_existing_ids(dom: minidom.Document) -> set[int]:
     return ids
 
 
-def _find_fc_object_list(dom: minidom.Document) -> minidom.Element:
-    """Return the ObjectList that is a direct child of the SW.Blocks.FC element."""
+def _find_fc_object_list(dom: minidom.Document):
+    """
+    Return (fc_obj_list, title_node) where title_node is the FC-level
+    <MultilingualText CompositionName="Title"> element (or None).
+
+    New CompileUnits must be inserted BEFORE the FC Title so that all
+    CompileUnits form a contiguous block — TIA Portal closes the
+    CompileUnits composition as soon as it encounters a non-CompileUnit
+    element, so anything inserted after Title will fail to import.
+    """
     fc_nodes = dom.getElementsByTagName("SW.Blocks.FC")
     if not fc_nodes:
         raise ValueError(
@@ -111,55 +119,69 @@ def _find_fc_object_list(dom: minidom.Document) -> minidom.Element:
         )
     fc_elem = fc_nodes[0]
 
+    obj_list = None
     for child in fc_elem.childNodes:
         if child.nodeName == "ObjectList":
-            return child
+            obj_list = child
+            break
 
-    # No ObjectList yet — create one
-    obj_list = dom.createElement("ObjectList")
-    fc_elem.appendChild(obj_list)
-    return obj_list
+    if obj_list is None:
+        obj_list = dom.createElement("ObjectList")
+        fc_elem.appendChild(obj_list)
+
+    # Locate the FC-level Title node to use as insertion anchor
+    title_node = None
+    for child in obj_list.childNodes:
+        if (
+            child.nodeName == "MultilingualText"
+            and child.getAttribute("CompositionName") == "Title"
+        ):
+            title_node = child
+            break
+
+    return obj_list, title_node
 
 
 def inject_networks(xml_path: str, sensor_names: list[str], source_fb_name: str = None) -> int:
     """
-    Parse the exported FC XML at *xml_path*, append one new LAD network per
-    sensor name, and overwrite the file.  Returns the number of networks added.
+    Parse the exported FC XML at *xml_path*, insert one new LAD network per
+    sensor name (before the FC Title element), and overwrite the file.
+    Returns the number of networks added.
 
-    UIDs start at UID_OFFSET and are checked against every existing ID in the
-    document; if a collision is detected the window is shifted upward until clear.
+    All injected CompileUnits are placed immediately before the FC's Title
+    MultilingualText so they remain contiguous with any existing networks —
+    TIA Portal's import requires CompileUnits to form an unbroken sequence.
     """
     fb_name = source_fb_name or SOURCE_FB_NAME
 
     dom = minidom.parse(xml_path)
     existing_ids = _collect_existing_ids(dom)
-    obj_list = _find_fc_object_list(dom)
+    obj_list, title_node = _find_fc_object_list(dom)
 
     injected = 0
     for idx, sensor_name in enumerate(sensor_names):
-        cu_xml = _build_compile_unit_xml(idx, sensor_name, fb_name)
-
-        # Detect and resolve UID collisions (belt-and-suspenders guard)
         base = UID_OFFSET + idx * UID_WINDOW
         shift = 0
         while any((base + shift + offset) in existing_ids for offset in range(UID_WINDOW)):
             shift += UID_WINDOW
 
-        if shift:
-            # Re-render with shifted UIDs
-            shifted_idx = idx + (shift // UID_WINDOW)
-            cu_xml = _build_compile_unit_xml(shifted_idx, sensor_name, fb_name)
+        effective_idx = idx + (shift // UID_WINDOW)
+        cu_xml = _build_compile_unit_xml(effective_idx, sensor_name, fb_name)
 
-        # Register all UIDs from this network so subsequent sensors don't collide
         for offset in range(UID_WINDOW):
             existing_ids.add(base + shift + offset)
 
         cu_fragment = minidom.parseString(cu_xml).documentElement
         adopted = dom.importNode(cu_fragment, deep=True)
-        obj_list.appendChild(adopted)
+
+        # Insert before Title to keep all CompileUnits contiguous
+        if title_node is not None:
+            obj_list.insertBefore(adopted, title_node)
+        else:
+            obj_list.appendChild(adopted)
+
         injected += 1
 
-    # Write with the same UTF-8 declaration the original had
     xml_bytes: bytes = dom.toxml(encoding="utf-8")
     with open(xml_path, "wb") as fh:
         fh.write(xml_bytes)
