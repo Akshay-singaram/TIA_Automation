@@ -239,15 +239,9 @@ class TIASession:
             print(f"    [DB] '{db_name}' already exists — skipping.")
             return db_name, False
 
-        fb_block, _ = self._find_block_recursive(self._plc_software.BlockGroup, fb_name)
-        if fb_block is None:
-            raise ValueError(
-                f"Source FB '{fb_name}' not found in the project.\n"
-                f"  Check SOURCE_FB_NAME in config.py."
-            )
-
-        # auto_number=True, number=1 (ignored when auto_number is True)
-        self._block_group.Blocks.CreateInstanceDB(db_name, True, 1, fb_block)
+        # TIA Portal Openness V19: CreateInstanceDB(name, autoNumber, number, instanceOfName)
+        # The last argument is the FB name as a string, not the block object.
+        self._block_group.Blocks.CreateInstanceDB(db_name, True, 1, fb_name)
         print(f"    [DB] Created '{db_name}'.")
         return db_name, True
 
