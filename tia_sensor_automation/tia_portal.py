@@ -275,15 +275,23 @@ class TIASession:
 
     def import_fc(self, xml_path: str, fc_name: str = None) -> None:
         """
-        Reimport a (modified) FC XML, overriding the existing block.
+        Reimport a (modified) FC XML back into TIA Portal.
 
-        Uses the parent group recorded during ``export_fc``; falls back to
-        the configured block group.
+        TIA Portal requires the FC's CompileUnits composition to be empty
+        before importing (IOrdered constraint).  We delete the existing block
+        first, then import the modified XML as a fresh block.
         """
         import Siemens.Engineering as eng
         from System.IO import FileInfo
 
         name = fc_name or TARGET_FC_NAME
+
+        # Delete the existing FC so the CompileUnits composition is empty
+        fc_block, _ = self._find_block_recursive(self._plc_software.BlockGroup, name)
+        if fc_block is not None:
+            fc_block.Delete()
+            print(f"  [FC]  Deleted existing '{name}' for clean reimport.")
+
         group = self._fc_export_group or self._block_group
         group.Blocks.Import(FileInfo(xml_path), eng.ImportOptions.Override)
         print(f"  [FC]  Reimported '{name}' from {xml_path}")
