@@ -136,7 +136,8 @@ tia_sensor_automation/
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `No running TIA Portal V19 instance found` | Script not run as Administrator, or portal not open | Right-click terminal → "Run as Administrator"; ensure TIA Portal V19 is open with a project loaded |
-| `Could not find a PLC software container` | No PLC device in project, or wrong `device_name` | Add a PLC device in the project or set `device_name=` in `TIASession()` in `main.py` |
+| `Could not find a PLC software container` | PLC CPU is a nested DeviceItem (rack slot), or sub-namespace not resolved | Fixed in v1.1 — script now scans DeviceItems recursively and imports `HW.Software` explicitly |
+| `Permission denied: sensors.xlsx` | Excel file is open in Microsoft Excel (file lock) | Close the workbook in Excel before running the script |
 | `Column 'Sensor_Name' not found` | Excel header typo or wrong column name | Check the header row of your workbook; update `SENSOR_COLUMN_NAME` in `config.py` |
 | `Source FB 'Sensor_FB' not found` | FB does not exist in project | Create the FB in TIA Portal first, or correct `SOURCE_FB_NAME` in `config.py` |
 | `Target FC 'Main_FC' not found` | FC does not exist in project | Create the FC in TIA Portal first, or correct `TARGET_FC_NAME` in `config.py` |
@@ -144,6 +145,15 @@ tia_sensor_automation/
 | Compilation errors after import | UID collision or malformed XML | Increase `UID_OFFSET` in `config.py`; inspect the generated XML in `exports/` |
 | `ImportError: No module named 'clr'` | pythonnet not installed | `pip install pythonnet` |
 | Openness API throws `COMException` | TIA Portal Openness not enabled | Enable "TIA Portal Openness" in TIA Portal → Options → Settings → General |
+
+---
+
+## Changelog
+
+### v1.1
+- **Fixed** PLC software discovery — `Siemens.Engineering.HW.Software` is now imported as an explicit sub-namespace so `GetService[SoftwareContainer]()` resolves correctly under pythonnet.
+- **Fixed** DeviceItem traversal — scanner is now recursive, covering CPU modules nested inside rack slots.
+- Console now prints all device names found in the project to aid diagnosis if the PLC still cannot be located.
 
 ---
 

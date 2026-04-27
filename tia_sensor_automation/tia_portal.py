@@ -62,7 +62,6 @@ class TIASession:
         _bootstrap_clr()
 
         import Siemens.Engineering as eng
-        import Siemens.Engineering.HW as hw
 
         # Attach to the first running TIA Portal V19 process
         processes = list(eng.TiaPortal.GetProcesses())
@@ -84,7 +83,7 @@ class TIASession:
         self._project = projects[0]
         print(f"  [TIA] Project : {self._project.Name}")
 
-        self._plc_software = self._find_plc_software(hw)
+        self._plc_software = self._find_plc_software(None)
         self._block_group = self._resolve_block_group(BLOCK_GROUP_PATH)
 
         os.makedirs(EXPORT_DIR, exist_ok=True)
@@ -104,27 +103,54 @@ class TIASession:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _find_plc_software(self, hw):
-        """Walk all devices and return the first PLC software container found."""
-        for device in self._project.Devices:
+    def _find_plc_software(self, _unused):
+        """
+        Walk all devices recursively and return the first PLC software container.
+
+        pythonnet requires the HW.Software sub-namespace to be imported
+        explicitly before GetService can resolve SoftwareContainer.
+        """
+        import Siemens.Engineering.HW.Software as hwsw  # explicit sub-ns import
+
+        devices = list(self._project.Devices)
+        print(f"  [TIA] Devices in project: {[d.Name for d in devices]}")
+
+        for device in devices:
             if self.device_name and device.Name != self.device_name:
                 continue
-            for item in device.DeviceItems:
-                try:
-                    container = item.GetService[hw.Software.SoftwareContainer]()
-                    if container is None:
-                        continue
-                    software = container.Software
-                    if hasattr(software, "BlockGroup"):
-                        print(f"  [TIA] PLC software found on device '{device.Name}'.")
-                        return software
-                except Exception:
-                    continue
+            result = self._scan_device_items(device.DeviceItems, hwsw, device.Name)
+            if result is not None:
+                return result
+
         raise RuntimeError(
             "Could not find a PLC software container in the open project.\n"
             f"  device_name filter = {self.device_name!r}\n"
             "  Ensure a PLC device is present and configured."
         )
+
+    def _scan_device_items(self, items, hwsw, device_name: str):
+        """Recursively search DeviceItems for a SoftwareContainer with a BlockGroup."""
+        for item in items:
+            try:
+                container = item.GetService[hwsw.SoftwareContainer]()
+                if container is not None:
+                    software = container.Software
+                    if hasattr(software, "BlockGroup"):
+                        print(
+                            f"  [TIA] PLC software found on device '{device_name}'"
+                            f", item '{item.Name}'."
+                        )
+                        return software
+            except Exception:
+                pass
+            # Recurse into nested DeviceItems (rack slots, sub-modules, etc.)
+            try:
+                result = self._scan_device_items(item.DeviceItems, hwsw, device_name)
+                if result is not None:
+                    return result
+            except Exception:
+                pass
+        return None
 
     def _resolve_block_group(self, path: str):
         """
