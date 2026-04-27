@@ -5,7 +5,10 @@ UID layout per injected network (base = UID_OFFSET + index * UID_WINDOW):
   base + 0  —  Call element
   base + 1  —  Instance element (GlobalVariable)
   base + 2  —  Wire (Powerrail → EN)
-  base + 3  —  Title MultilingualTextItem
+  base + 3  —  Comment MultilingualText
+  base + 4  —  Comment MultilingualTextItem
+  base + 5  —  Title MultilingualText
+  base + 6  —  Title MultilingualTextItem
   base + 10 —  CompileUnit element ID itself
 """
 
@@ -20,7 +23,7 @@ from config import FLGNET_NAMESPACE, SOURCE_FB_NAME, UID_OFFSET, UID_WINDOW
 # ---------------------------------------------------------------------------
 
 _COMPILE_UNIT_TEMPLATE = """\
-<SW.Blocks.CompileUnit ID="{cu_id}" CompositionName="Networks">
+<SW.Blocks.CompileUnit ID="{cu_id}" CompositionName="CompileUnits">
   <AttributeList>
     <NetworkSource>
       <FlgNet xmlns="{flgnet_ns}">
@@ -28,15 +31,15 @@ _COMPILE_UNIT_TEMPLATE = """\
           <Call UId="{call_uid}">
             <CallInfo Name="{fb_name}" BlockType="FB">
               <Instance Scope="GlobalVariable" UId="{inst_uid}">
-                <Component Name="{db_name}" />
+                <Component Name="{db_name}"/>
               </Instance>
             </CallInfo>
           </Call>
         </Parts>
         <Wires>
           <Wire UId="{wire_uid}">
-            <Powerrail />
-            <NameCon UId="{call_uid}" Name="en" />
+            <Powerrail/>
+            <NameCon UId="{call_uid}" Name="en"/>
           </Wire>
         </Wires>
       </FlgNet>
@@ -44,18 +47,25 @@ _COMPILE_UNIT_TEMPLATE = """\
     <ProgrammingLanguage>LAD</ProgrammingLanguage>
   </AttributeList>
   <ObjectList>
-    <MultilingualText CompositionName="Title">
+    <MultilingualText ID="{comment_uid}" CompositionName="Comment">
       <ObjectList>
-        <MultilingualTextItem ID="{title_uid}" CompositionName="Items">
+        <MultilingualTextItem ID="{comment_item_uid}" CompositionName="Items">
           <AttributeList>
             <Culture>en-US</Culture>
-            <Text>Sensor: {sensor_name}</Text>
+            <Text/>
           </AttributeList>
         </MultilingualTextItem>
       </ObjectList>
     </MultilingualText>
-    <MultilingualText CompositionName="Comment">
-      <ObjectList />
+    <MultilingualText ID="{title_uid}" CompositionName="Title">
+      <ObjectList>
+        <MultilingualTextItem ID="{title_item_uid}" CompositionName="Items">
+          <AttributeList>
+            <Culture>en-US</Culture>
+            <Text>{sensor_name}</Text>
+          </AttributeList>
+        </MultilingualTextItem>
+      </ObjectList>
     </MultilingualText>
   </ObjectList>
 </SW.Blocks.CompileUnit>"""
@@ -68,7 +78,10 @@ def _build_compile_unit_xml(network_index: int, sensor_name: str, fb_name: str) 
         call_uid=base,
         inst_uid=base + 1,
         wire_uid=base + 2,
-        title_uid=base + 3,
+        comment_uid=base + 3,
+        comment_item_uid=base + 4,
+        title_uid=base + 5,
+        title_item_uid=base + 6,
         db_name=f"{sensor_name}_DB",
         sensor_name=sensor_name,
         fb_name=fb_name,
