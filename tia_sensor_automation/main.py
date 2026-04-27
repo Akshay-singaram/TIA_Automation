@@ -79,6 +79,15 @@ def main() -> int:
             print(f"  → Created: {created}   Skipped (already exist): {skipped}")
 
             # ----------------------------------------------------------
+            # Step 3b — Compile after DB creation so the project is
+            # consistent before export (TIA Portal refuses to export
+            # blocks when newly created DBs are not yet compiled)
+            # ----------------------------------------------------------
+            if created > 0:
+                print("  [Compile] Compiling new DBs before export…")
+                session.compile()
+
+            # ----------------------------------------------------------
             # Step 4 — Export target FC
             # ----------------------------------------------------------
             _step(4, f"Exporting FC  '{TARGET_FC_NAME}'")
