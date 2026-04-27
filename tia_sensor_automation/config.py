@@ -11,7 +11,7 @@ EXCEL_FILE_PATH = os.path.join(os.path.dirname(__file__), "sensors.xlsx")
 SENSOR_COLUMN_NAME = "Sensor_Name"
 
 # === Source FB that each sensor DB will instantiate ===
-SOURCE_FB_NAME = "Temperature_Input_Processing"
+SOURCE_FB_NAME = "Temperature_Input_Processing_1"
 
 # === Target LAD FC to inject networks into ===
 TARGET_FC_NAME = "Process_Temp"
