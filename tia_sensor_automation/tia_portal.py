@@ -114,14 +114,14 @@ class TIASession:
         Using reflection avoids hard-coding the import path and works even if
         pythonnet cannot resolve a deep sub-namespace via `import`.
         """
-        from System.Reflection import Assembly
+        from System import AppDomain
 
         candidates = [
             "Siemens.Engineering.HW.Features.SoftwareContainer",
             "Siemens.Engineering.HW.Software.SoftwareContainer",
             "Siemens.Engineering.SW.SoftwareContainer",
         ]
-        for asm in Assembly.GetLoadedAssemblies():
+        for asm in AppDomain.CurrentDomain.GetAssemblies():
             if "Siemens.Engineering" not in str(asm.FullName):
                 continue
             for name in candidates:
