@@ -267,6 +267,8 @@ class TIASession:
         self._fc_export_group = parent_group
 
         export_path = os.path.join(EXPORT_DIR, f"{name}.xml")
+        if os.path.exists(export_path):
+            os.remove(export_path)
         fc_block.Export(FileInfo(export_path), eng.ExportOptions(0))
         print(f"  [FC]  Exported '{name}' → {export_path}")
         return export_path
