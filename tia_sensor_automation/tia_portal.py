@@ -103,14 +103,41 @@ class TIASession:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _find_plc_software(self, _unused):
+    @staticmethod
+    def _get_software_container_type():
         """
-        Walk all devices recursively and return the first PLC software container.
+        Locate the SoftwareContainer .NET type through reflection.
 
-        pythonnet requires the HW.Software sub-namespace to be imported
-        explicitly before GetService can resolve SoftwareContainer.
+        The namespace changed between TIA Portal versions:
+          V15–V18  →  Siemens.Engineering.HW.Features.SoftwareContainer
+          V19+     →  Siemens.Engineering.HW.Features.SoftwareContainer  (same)
+        Using reflection avoids hard-coding the import path and works even if
+        pythonnet cannot resolve a deep sub-namespace via `import`.
         """
-        import Siemens.Engineering.HW.Software as hwsw  # explicit sub-ns import
+        from System.Reflection import Assembly
+
+        candidates = [
+            "Siemens.Engineering.HW.Features.SoftwareContainer",
+            "Siemens.Engineering.HW.Software.SoftwareContainer",
+            "Siemens.Engineering.SW.SoftwareContainer",
+        ]
+        for asm in Assembly.GetLoadedAssemblies():
+            if "Siemens.Engineering" not in str(asm.FullName):
+                continue
+            for name in candidates:
+                t = asm.GetType(name)
+                if t is not None:
+                    print(f"  [TIA] SoftwareContainer type: {name}")
+                    return t
+
+        raise RuntimeError(
+            "Cannot locate SoftwareContainer in the loaded Siemens.Engineering assembly.\n"
+            "  Verify TIA_DLL_PATH in config.py points to the correct V19 DLL."
+        )
+
+    def _find_plc_software(self, _unused):
+        """Walk all devices recursively and return the first PLC software container."""
+        sc_type = self._get_software_container_type()
 
         devices = list(self._project.Devices)
         print(f"  [TIA] Devices in project: {[d.Name for d in devices]}")
@@ -118,7 +145,7 @@ class TIASession:
         for device in devices:
             if self.device_name and device.Name != self.device_name:
                 continue
-            result = self._scan_device_items(device.DeviceItems, hwsw, device.Name)
+            result = self._scan_device_items(device.DeviceItems, sc_type, device.Name)
             if result is not None:
                 return result
 
@@ -128,11 +155,11 @@ class TIASession:
             "  Ensure a PLC device is present and configured."
         )
 
-    def _scan_device_items(self, items, hwsw, device_name: str):
+    def _scan_device_items(self, items, sc_type, device_name: str):
         """Recursively search DeviceItems for a SoftwareContainer with a BlockGroup."""
         for item in items:
             try:
-                container = item.GetService[hwsw.SoftwareContainer]()
+                container = item.GetService[sc_type]()
                 if container is not None:
                     software = container.Software
                     if hasattr(software, "BlockGroup"):
@@ -145,7 +172,7 @@ class TIASession:
                 pass
             # Recurse into nested DeviceItems (rack slots, sub-modules, etc.)
             try:
-                result = self._scan_device_items(item.DeviceItems, hwsw, device_name)
+                result = self._scan_device_items(item.DeviceItems, sc_type, device_name)
                 if result is not None:
                     return result
             except Exception:
