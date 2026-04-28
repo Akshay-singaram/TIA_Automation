@@ -44,7 +44,7 @@ _COMPILE_UNIT_TEMPLATE = """\
         </Wires>
       </FlgNet>
     </NetworkSource>
-    <ProgrammingLanguage>LAD</ProgrammingLanguage>
+    <ProgrammingLanguage>{prog_lang}</ProgrammingLanguage>
   </AttributeList>
   <ObjectList>
     <MultilingualText ID="{comment_uid}" CompositionName="Comment">
@@ -71,7 +71,7 @@ _COMPILE_UNIT_TEMPLATE = """\
 </SW.Blocks.CompileUnit>"""
 
 
-def _build_compile_unit_xml(network_index: int, sensor_name: str, fb_name: str) -> str:
+def _build_compile_unit_xml(network_index: int, sensor_name: str, fb_name: str, prog_lang: str = "LAD") -> str:
     base = UID_OFFSET + network_index * UID_WINDOW
     return _COMPILE_UNIT_TEMPLATE.format(
         cu_id=base + 10,
@@ -86,7 +86,23 @@ def _build_compile_unit_xml(network_index: int, sensor_name: str, fb_name: str) 
         sensor_name=sensor_name,
         fb_name=fb_name,
         flgnet_ns=FLGNET_NAMESPACE,
+        prog_lang=prog_lang,
     )
+
+
+def _detect_programming_language(dom: minidom.Document) -> str:
+    """
+    Read <ProgrammingLanguage> from the FC's AttributeList.
+    Returns 'F_LAD' for safety blocks, 'LAD' for standard blocks.
+    """
+    for fc in dom.getElementsByTagName("SW.Blocks.FC"):
+        for attr_list in fc.childNodes:
+            if attr_list.nodeName != "AttributeList":
+                continue
+            for child in attr_list.childNodes:
+                if child.nodeName == "ProgrammingLanguage" and child.firstChild:
+                    return child.firstChild.nodeValue.strip()
+    return "LAD"
 
 
 def _collect_existing_ids(dom: minidom.Document) -> set[int]:
@@ -155,6 +171,7 @@ def inject_networks(xml_path: str, sensor_names: list[str], source_fb_name: str 
     fb_name = source_fb_name
 
     dom = minidom.parse(xml_path)
+    prog_lang = _detect_programming_language(dom)
     existing_ids = _collect_existing_ids(dom)
     obj_list, title_node = _find_fc_object_list(dom)
 
@@ -166,7 +183,7 @@ def inject_networks(xml_path: str, sensor_names: list[str], source_fb_name: str 
             shift += UID_WINDOW
 
         effective_idx = idx + (shift // UID_WINDOW)
-        cu_xml = _build_compile_unit_xml(effective_idx, sensor_name, fb_name)
+        cu_xml = _build_compile_unit_xml(effective_idx, sensor_name, fb_name, prog_lang)
 
         for offset in range(UID_WINDOW):
             existing_ids.add(base + shift + offset)
