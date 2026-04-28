@@ -15,7 +15,7 @@ UID layout per injected network (base = UID_OFFSET + index * UID_WINDOW):
 import re
 from xml.dom import minidom
 
-from config import FLGNET_NAMESPACE, SOURCE_FB_NAME, UID_OFFSET, UID_WINDOW
+from config import FLGNET_NAMESPACE, UID_OFFSET, UID_WINDOW
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ def inject_networks(xml_path: str, sensor_names: list[str], source_fb_name: str 
     MultilingualText so they remain contiguous with any existing networks —
     TIA Portal's import requires CompileUnits to form an unbroken sequence.
     """
-    fb_name = source_fb_name or SOURCE_FB_NAME
+    fb_name = source_fb_name
 
     dom = minidom.parse(xml_path)
     existing_ids = _collect_existing_ids(dom)
