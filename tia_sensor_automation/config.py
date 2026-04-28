@@ -8,17 +8,12 @@ TIA_DLL_PATH = (
 
 # === Excel input ===
 EXCEL_FILE_PATH = os.path.join(os.path.dirname(__file__), "sensors.xlsx")
-SENSOR_COLUMN_NAME = "Sensor_Name"
 
-# === Source FB that each sensor DB will instantiate ===
-SOURCE_FB_NAME = "Temperature_Input_Processing_1"
-
-# === Target LAD FC to inject networks into ===
-TARGET_FC_NAME = "Process_Temp"
-
-# === Block group path (relative to root "Program blocks") ===
-# Use "/" for nesting, e.g. "Sensors" or "SubGroup/Sensors"
-BLOCK_GROUP_PATH = "Process_Temp_DB"
+# === Excel column headers ===
+COL_SENSOR_NAME  = "Sensor_Name"
+COL_SOURCE_FB    = "Source_FB"
+COL_TARGET_FC    = "Target_FC"
+COL_BLOCK_GROUP  = "Block_Group"
 
 # === Runtime export directory ===
 EXPORT_DIR = os.path.join(os.path.dirname(__file__), "exports")

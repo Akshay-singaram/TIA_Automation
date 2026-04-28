@@ -8,13 +8,7 @@ directly from Python.  Must be run as Administrator.
 import os
 import sys
 
-from config import (
-    BLOCK_GROUP_PATH,
-    EXPORT_DIR,
-    SOURCE_FB_NAME,
-    TARGET_FC_NAME,
-    TIA_DLL_PATH,
-)
+from config import EXPORT_DIR, TIA_DLL_PATH
 
 
 def _bootstrap_clr() -> None:
@@ -36,23 +30,22 @@ class TIASession:
     Usage
     -----
     with TIASession() as session:
-        session.create_instance_db("Sensor1")
-        path = session.export_fc()
+        group = session.get_block_group("Sensors")
+        session.create_instance_db("Sensor1", "Source_FB", group)
+        path = session.export_fc("Main_FC")
         # … modify path …
-        session.import_fc(path)
+        session.import_fc(path, "Main_FC")
         session.compile()
     # project is saved automatically on clean exit
     """
 
-    def __init__(self, device_name: str = None) -> None:
-        # Optional: restrict to a specific PLC device by name
+    def __init__(self, device_name: str | None = None) -> None:
         self.device_name = device_name
-
         self._portal = None
         self._project = None
         self._plc_software = None
-        self._block_group = None
-        self._fc_export_group = None   # group where the target FC lives
+        self._group_cache: dict = {}       # path str → resolved .NET group object
+        self._fc_export_groups: dict = {}  # fc_name → parent group used at export time
 
     # ------------------------------------------------------------------
     # Context manager protocol
@@ -63,7 +56,6 @@ class TIASession:
 
         import Siemens.Engineering as eng
 
-        # Attach to the first running TIA Portal V19 process
         processes = list(eng.TiaPortal.GetProcesses())
         if not processes:
             raise RuntimeError(
@@ -76,16 +68,11 @@ class TIASession:
 
         projects = list(self._portal.Projects)
         if not projects:
-            raise RuntimeError(
-                "No project is open in TIA Portal. "
-                "Open the target project first."
-            )
+            raise RuntimeError("No project is open in TIA Portal. Open the target project first.")
         self._project = projects[0]
         print(f"  [TIA] Project : {self._project.Name}")
 
-        self._plc_software = self._find_plc_software(None)
-        self._block_group = self._resolve_block_group(BLOCK_GROUP_PATH)
-
+        self._plc_software = self._find_plc_software()
         os.makedirs(EXPORT_DIR, exist_ok=True)
         return self
 
@@ -97,7 +84,7 @@ class TIASession:
                 print("  [TIA] Project saved successfully.")
             except Exception as exc:
                 print(f"  [TIA] WARNING — could not save project: {exc}")
-        return False  # never suppress exceptions
+        return False
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -105,15 +92,6 @@ class TIASession:
 
     @staticmethod
     def _get_software_container_type():
-        """
-        Locate the SoftwareContainer .NET type through reflection.
-
-        The namespace changed between TIA Portal versions:
-          V15–V18  →  Siemens.Engineering.HW.Features.SoftwareContainer
-          V19+     →  Siemens.Engineering.HW.Features.SoftwareContainer  (same)
-        Using reflection avoids hard-coding the import path and works even if
-        pythonnet cannot resolve a deep sub-namespace via `import`.
-        """
         from System import AppDomain
 
         candidates = [
@@ -135,10 +113,8 @@ class TIASession:
             "  Verify TIA_DLL_PATH in config.py points to the correct V19 DLL."
         )
 
-    def _find_plc_software(self, _unused):
-        """Walk all devices recursively and return the first PLC software container."""
+    def _find_plc_software(self):
         sc_type = self._get_software_container_type()
-
         devices = list(self._project.Devices)
         print(f"  [TIA] Devices in project: {[d.Name for d in devices]}")
 
@@ -156,21 +132,16 @@ class TIASession:
         )
 
     def _scan_device_items(self, items, sc_type, device_name: str):
-        """Recursively search DeviceItems for a SoftwareContainer with a BlockGroup."""
         for item in items:
             try:
                 container = item.GetService[sc_type]()
                 if container is not None:
                     software = container.Software
                     if hasattr(software, "BlockGroup"):
-                        print(
-                            f"  [TIA] PLC software found on device '{device_name}'"
-                            f", item '{item.Name}'."
-                        )
+                        print(f"  [TIA] PLC software found on device '{device_name}', item '{item.Name}'.")
                         return software
             except Exception:
                 pass
-            # Recurse into nested DeviceItems (rack slots, sub-modules, etc.)
             try:
                 result = self._scan_device_items(item.DeviceItems, sc_type, device_name)
                 if result is not None:
@@ -180,16 +151,10 @@ class TIASession:
         return None
 
     def _resolve_block_group(self, path: str):
-        """
-        Navigate a '/'-delimited sub-group path starting from the root
-        BlockGroup ("Program blocks").
-
-        An empty path returns the root BlockGroup itself.
-        """
+        """Navigate a '/'-delimited sub-group path from the root BlockGroup."""
         group = self._plc_software.BlockGroup
         if not path or not path.strip():
             return group
-
         for part in path.split("/"):
             part = part.strip()
             if not part:
@@ -199,17 +164,13 @@ class TIASession:
                 available = [g.Name for g in group.Groups]
                 raise ValueError(
                     f"Block group '{part}' not found under '{group.Name}'.\n"
-                    f"  Available sub-groups: {available}\n"
-                    f"  Check BLOCK_GROUP_PATH in config.py."
+                    f"  Available sub-groups: {available}"
                 )
             group = child
         return group
 
     def _find_block_recursive(self, group, name: str):
-        """
-        Depth-first search for a block by name across *group* and all
-        its sub-groups.  Returns (block, parent_group) or (None, None).
-        """
+        """DFS for a block by name. Returns (block, parent_group) or (None, None)."""
         found = group.Blocks.Find(name)
         if found is not None:
             return found, group
@@ -223,84 +184,71 @@ class TIASession:
     # Public API
     # ------------------------------------------------------------------
 
-    def create_instance_db(self, sensor_name: str, source_fb_name: str = None) -> tuple[str, bool]:
+    def get_block_group(self, path: str):
         """
-        Create a global instance DB named ``{sensor_name}_DB`` that
-        instantiates *source_fb_name*.
+        Return the resolved .NET block group for *path*, using a cache so
+        the same path is only navigated once per session.
+        """
+        if path not in self._group_cache:
+            self._group_cache[path] = self._resolve_block_group(path)
+        return self._group_cache[path]
 
-        Skips creation (logs a message) if the DB already exists.
+    def create_instance_db(self, sensor_name: str, source_fb_name: str, block_group) -> tuple[str, bool]:
+        """
+        Create a global instance DB named ``{sensor_name}_DB`` in *block_group*
+        instantiating *source_fb_name*.  Skips if DB already exists.
         Returns ``(db_name, was_created)``.
         """
-        fb_name = source_fb_name or SOURCE_FB_NAME
         db_name = f"{sensor_name}_DB"
 
-        existing = self._block_group.Blocks.Find(db_name)
+        existing = block_group.Blocks.Find(db_name)
         if existing is not None:
             print(f"    [DB] '{db_name}' already exists — skipping.")
             return db_name, False
 
-        # TIA Portal Openness V19: CreateInstanceDB(name, autoNumber, number, instanceOfName)
-        # The last argument is the FB name as a string, not the block object.
-        self._block_group.Blocks.CreateInstanceDB(db_name, True, 1, fb_name)
+        block_group.Blocks.CreateInstanceDB(db_name, True, 1, source_fb_name)
         print(f"    [DB] Created '{db_name}'.")
         return db_name, True
 
-    def export_fc(self, fc_name: str = None) -> str:
+    def export_fc(self, fc_name: str) -> str:
         """
-        Export the target LAD FC as a SimaticML XML file.
-
-        Stores the FC's parent group so ``import_fc`` can reimport to the
-        correct location.  Returns the path to the exported file.
+        Export the named LAD FC as SimaticML XML.
+        Returns the path to the exported file.
         """
         import Siemens.Engineering as eng
         from System.IO import FileInfo
 
-        name = fc_name or TARGET_FC_NAME
-        fc_block, parent_group = self._find_block_recursive(
-            self._plc_software.BlockGroup, name
-        )
+        fc_block, parent_group = self._find_block_recursive(self._plc_software.BlockGroup, fc_name)
         if fc_block is None:
-            raise ValueError(
-                f"Target FC '{name}' not found in the project.\n"
-                f"  Check TARGET_FC_NAME in config.py."
-            )
-        self._fc_export_group = parent_group
+            raise ValueError(f"Target FC '{fc_name}' not found in the project.")
+        self._fc_export_groups[fc_name] = parent_group
 
-        export_path = os.path.join(EXPORT_DIR, f"{name}.xml")
+        export_path = os.path.join(EXPORT_DIR, f"{fc_name}.xml")
         if os.path.exists(export_path):
             os.remove(export_path)
         fc_block.Export(FileInfo(export_path), eng.ExportOptions(0))
-        print(f"  [FC]  Exported '{name}' → {export_path}")
+        print(f"  [FC]  Exported '{fc_name}' → {export_path}")
         return export_path
 
-    def import_fc(self, xml_path: str, fc_name: str = None) -> None:
+    def import_fc(self, xml_path: str, fc_name: str) -> None:
         """
-        Reimport a (modified) FC XML back into TIA Portal.
-
-        TIA Portal requires the FC's CompileUnits composition to be empty
-        before importing (IOrdered constraint).  We delete the existing block
-        first, then import the modified XML as a fresh block.
+        Delete the existing FC then reimport the modified XML as a fresh block.
+        (TIA Portal requires CompileUnits to be empty before importing.)
         """
         import Siemens.Engineering as eng
         from System.IO import FileInfo
 
-        name = fc_name or TARGET_FC_NAME
-
-        # Delete the existing FC so the CompileUnits composition is empty
-        fc_block, _ = self._find_block_recursive(self._plc_software.BlockGroup, name)
+        fc_block, _ = self._find_block_recursive(self._plc_software.BlockGroup, fc_name)
         if fc_block is not None:
             fc_block.Delete()
-            print(f"  [FC]  Deleted existing '{name}' for clean reimport.")
+            print(f"  [FC]  Deleted existing '{fc_name}' for clean reimport.")
 
-        group = self._fc_export_group or self._block_group
+        group = self._fc_export_groups.get(fc_name) or self._plc_software.BlockGroup
         group.Blocks.Import(FileInfo(xml_path), eng.ImportOptions.Override)
-        print(f"  [FC]  Reimported '{name}' from {xml_path}")
+        print(f"  [FC]  Reimported '{fc_name}' from {xml_path}")
 
     def compile(self):
-        """
-        Compile the PLC software and print all compiler messages.
-        Returns the raw CompilerResult object.
-        """
+        """Compile the PLC software and print all messages. Returns the CompilerResult."""
         import Siemens.Engineering.Compiler as compiler_ns
 
         compilable = self._plc_software.GetService[compiler_ns.ICompilable]()
@@ -308,13 +256,10 @@ class TIASession:
             raise RuntimeError("PLC software does not expose ICompilable — cannot compile.")
 
         result = compilable.Compile()
-        print(
-            f"  [Compile] Result: {result.State}  "
-            f"(errors={result.ErrorCount}, warnings={result.WarningCount})"
-        )
+        print(f"  [Compile] Result: {result.State}  (errors={result.ErrorCount}, warnings={result.WarningCount})")
         for msg in result.Messages:
             level = getattr(msg, "WarningLevel", "?")
-            path = getattr(msg, "PathName", "")
-            desc = getattr(msg, "Description", str(msg))
+            path  = getattr(msg, "PathName", "")
+            desc  = getattr(msg, "Description", str(msg))
             print(f"    [{level}] {path}: {desc}")
         return result

@@ -1,40 +1,62 @@
 from openpyxl import load_workbook
 
-from config import EXCEL_FILE_PATH, SENSOR_COLUMN_NAME
+from config import (
+    COL_BLOCK_GROUP,
+    COL_SENSOR_NAME,
+    COL_SOURCE_FB,
+    COL_TARGET_FC,
+    EXCEL_FILE_PATH,
+)
+
+REQUIRED_COLUMNS = [COL_SENSOR_NAME, COL_SOURCE_FB, COL_TARGET_FC, COL_BLOCK_GROUP]
 
 
-def read_sensor_names(file_path: str = None, column_name: str = None) -> list[str]:
+def read_sensor_rows(file_path: str | None = None) -> list[dict]:
     """
-    Read non-blank sensor names from the first sheet of an Excel workbook.
+    Read sensor/actuator rows from the first sheet of an Excel workbook.
 
-    Expects a header row whose first matching cell equals *column_name*.
-    Returns a list of stripped strings in sheet order.
+    Required columns (set in config.py):
+      COL_SENSOR_NAME  — name of the sensor or actuator
+      COL_SOURCE_FB    — FB to instantiate for this row
+      COL_TARGET_FC    — LAD FC to inject the network into
+      COL_BLOCK_GROUP  — block group path for the instance DB
+
+    Rows where Sensor_Name is blank are silently skipped.
+    Returns a list of dicts with keys: sensor_name, source_fb, target_fc, block_group.
     """
     path = file_path or EXCEL_FILE_PATH
-    col = column_name or SENSOR_COLUMN_NAME
 
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb.active
+    if ws is None:
+        raise ValueError(f"Workbook '{path}' has no active sheet.")
 
     header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
     if header_row is None:
         raise ValueError(f"Workbook '{path}' appears to be empty.")
 
-    header_list = [str(h).strip() if h is not None else "" for h in header_row]
-    if col not in header_list:
-        raise ValueError(
-            f"Column '{col}' not found in '{path}'.\n"
-            f"  Headers detected: {header_list}"
-        )
-    col_idx = header_list.index(col)
+    headers = [str(h).strip() if h is not None else "" for h in header_row]
 
-    sensors: list[str] = []
+    missing = [c for c in REQUIRED_COLUMNS if c not in headers]
+    if missing:
+        raise ValueError(
+            f"Missing column(s) in '{path}': {missing}\n"
+            f"  Headers found: {headers}"
+        )
+
+    idx = {col: headers.index(col) for col in REQUIRED_COLUMNS}
+
+    rows = []
     for row in ws.iter_rows(min_row=2, values_only=True):
-        if col_idx >= len(row):
+        sensor = row[idx[COL_SENSOR_NAME]] if idx[COL_SENSOR_NAME] < len(row) else None
+        if sensor is None or not str(sensor).strip():
             continue
-        value = row[col_idx]
-        if value is not None and str(value).strip():
-            sensors.append(str(value).strip())
+        rows.append({
+            "sensor_name": str(sensor).strip(),
+            "source_fb":   str(row[idx[COL_SOURCE_FB]]).strip(),
+            "target_fc":   str(row[idx[COL_TARGET_FC]]).strip(),
+            "block_group": str(row[idx[COL_BLOCK_GROUP]]).strip(),
+        })
 
     wb.close()
-    return sensors
+    return rows
