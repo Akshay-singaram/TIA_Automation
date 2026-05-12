@@ -147,11 +147,15 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
         field      = upd["variable_name"]
         value      = upd["default_value"]
 
-        field_groups[array_path][field][idx] = value
-
         if field.endswith("_SP"):
+            try:
+                value = f"{float(value):.1f}" if "." not in str(value) else str(value)
+            except (ValueError, TypeError):
+                pass
             en_field = field[:-3] + "_EN"
             field_groups[array_path][en_field][idx] = "TRUE"
+
+        field_groups[array_path][field][idx] = value
 
     written = 0
 
