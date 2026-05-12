@@ -1,30 +1,35 @@
 """
-Parse an exported GlobalDB/InstanceDB SimaticML XML and update <StartValue>
-elements inside array-of-struct members.
+Parse an exported GlobalDB/InstanceDB SimaticML XML and update SetPoint
+default values inside array-of-struct members.
 
-TIA Portal's IndexPath_TP only allows numeric indices in the Subelement Path,
-and Subelement may only contain StartValue (not Member children). For an
-Array of UDT/Struct, individual field defaults are expressed as an IEC 61131-3
-struct literal in the single StartValue of the numeric-indexed Subelement:
+TIA Portal's correct XML structure for array-of-UDT SetPoint start values
+groups by FIELD first, then by array index (not the other way around):
 
-  Section[Name=Static]
-    → Member[Name=part1]                   (dot-separated path to array)
-      → Member[Name=part2]
-        → Member[Name=array_name]          (the array itself)
-          → Subelement[Path="0"]           (numeric index only)
-              → StartValue                 "(HHH_SP:=588, HHH_EN:=TRUE)"
-
-Multiple Excel rows targeting the same (array, index) are merged into one
-struct literal before writing.
+  Member[Name=array]              (the array itself, e.g. StateMachine_State)
+    Sections
+      Section[Name="None"]
+        Member[Name=field]        (struct field, e.g. HHH_SP)
+          Subelement[Path="0"]   (array index — numeric only)
+            StartValue            the default value
+          Subelement[Path="1"]
+            StartValue
+        Member[Name=field2]
+          Subelement[Path="0"]
+            StartValue
 """
 
 from collections import defaultdict
 from xml.dom import minidom
 
+INTERFACE_NS = "http://www.siemens.com/automation/Openness/SW/Interface/v5"
+
+
+# ---------------------------------------------------------------------------
+# DOM helpers
+# ---------------------------------------------------------------------------
 
 def _child_element(parent, local_name: str, attr: str = None, val: str = None):
-    """Return the first direct child element matching local_name.
-    Attribute value comparison is case-insensitive."""
+    """Return first direct child element matching local_name (case-insensitive attr match)."""
     for node in parent.childNodes:
         if node.nodeType != node.ELEMENT_NODE:
             continue
@@ -36,7 +41,6 @@ def _child_element(parent, local_name: str, attr: str = None, val: str = None):
 
 
 def _child_member_names(parent) -> list[str]:
-    """Return all direct child Member names — used in warnings."""
     return [
         node.getAttribute("Name")
         for node in parent.childNodes
@@ -45,8 +49,33 @@ def _child_member_names(parent) -> list[str]:
     ]
 
 
+def _get_or_create(dom: minidom.Document, parent, tag: str, attr: str = None, val: str = None):
+    """Find or create a direct child element, using the interface namespace."""
+    existing = _child_element(parent, tag, attr, val)
+    if existing is not None:
+        return existing
+    elem = dom.createElementNS(INTERFACE_NS, tag)
+    if attr:
+        elem.setAttribute(attr, val)
+    parent.appendChild(elem)
+    return elem
+
+
+def _set_start_value(dom: minidom.Document, subelement, value: str) -> None:
+    sv = _child_element(subelement, "StartValue")
+    if sv is None:
+        sv = dom.createElementNS(INTERFACE_NS, "StartValue")
+        subelement.appendChild(sv)
+    for child in list(sv.childNodes):
+        sv.removeChild(child)
+    sv.appendChild(dom.createTextNode(value))
+
+
+# ---------------------------------------------------------------------------
+# Navigation
+# ---------------------------------------------------------------------------
+
 def _find_static_section(dom: minidom.Document):
-    """Return <Section Name="Static"> from the DB's Interface."""
     for sections_node in dom.getElementsByTagName("Sections"):
         static = _child_element(sections_node, "Section", "Name", "Static")
         if static is not None:
@@ -54,40 +83,10 @@ def _find_static_section(dom: minidom.Document):
     return None
 
 
-def _strip_setpoint_attribute(member_node) -> bool:
-    """
-    Remove the SetPoint BooleanAttribute from a Member's AttributeList.
-    TIA Portal blocks Openness import of start values for SetPoint=true variables.
-    Since the attribute is SystemDefined, TIA Portal re-applies it from the FB
-    after import, but this allows the start values to be written first.
-    Returns True if the attribute was found and removed.
-    """
-    attr_list = _child_element(member_node, "AttributeList")
-    if attr_list is None:
-        return False
-
-    to_remove = [
-        node for node in attr_list.childNodes
-        if node.nodeType == node.ELEMENT_NODE
-        and (node.localName or node.nodeName) == "BooleanAttribute"
-        and node.getAttribute("Name") == "SetPoint"
-    ]
-    for node in to_remove:
-        attr_list.removeChild(node)
-
-    # Drop empty AttributeList
-    if not any(n.nodeType == n.ELEMENT_NODE for n in attr_list.childNodes):
-        member_node.removeChild(attr_list)
-
-    return bool(to_remove)
-
-
 def _resolve_dotted_path(static_section, dot_path: str):
     """
-    Navigate a dot-separated Member path from the Static section.
-    e.g. 'HMI_Params.HMI_Inputs.StateMachine_State'
-    Name matching is case-insensitive.
-    Returns (final_node, None) on success, or (None, failed_part) on failure.
+    Navigate a dot-separated Member path from the Static section (case-insensitive).
+    Returns (final_node, None) on success or (None, failed_part) on failure.
     """
     node = static_section
     for part in dot_path.split("."):
@@ -100,35 +99,9 @@ def _resolve_dotted_path(static_section, dot_path: str):
     return node, None
 
 
-def _set_start_value(dom: minidom.Document, parent_node, value: str) -> None:
-    """Set or create <StartValue> text inside parent_node."""
-    sv = _child_element(parent_node, "StartValue")
-    if sv is None:
-        sv = dom.createElement("StartValue")
-        parent_node.appendChild(sv)
-    for child in list(sv.childNodes):
-        sv.removeChild(child)
-    sv.appendChild(dom.createTextNode(value))
-
-
-def _get_or_create_subelement(dom: minidom.Document, array_member, path: str):
-    """Find or create <Subelement Path="path"> under array_member."""
-    sub = _child_element(array_member, "Subelement", "Path", path)
-    if sub is None:
-        sub = dom.createElement("Subelement")
-        sub.setAttribute("Path", path)
-        array_member.appendChild(sub)
-    return sub
-
-
-def _build_struct_literal(fields: dict[str, str]) -> str:
-    """
-    Build an IEC 61131-3 struct literal from a field→value dict.
-    e.g. {'HHH_SP': '588', 'HHH_EN': 'TRUE'} → '(HHH_SP:=588, HHH_EN:=TRUE)'
-    """
-    parts = ", ".join(f"{k}:={v}" for k, v in fields.items())
-    return f"({parts})"
-
+# ---------------------------------------------------------------------------
+# Main update function
+# ---------------------------------------------------------------------------
 
 def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
     """
@@ -139,15 +112,15 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
                       (e.g. HMI_Params.HMI_Inputs.StateMachine_State)
       array_index   — integer index into the array
       variable_name — struct field name (e.g. HHH_SP)
-      default_value — value string for that field
+      default_value — value string
 
     When variable_name ends in _SP, the sibling _EN field is automatically
-    included in the struct literal with value TRUE.
+    set to TRUE at the same index.
 
-    Multiple rows targeting the same (array_path, array_index) are merged
-    into a single struct literal: (HHH_SP:=588, HHH_EN:=TRUE, HH_SP:=150, ...).
+    The generated XML structure matches TIA Portal's native export format:
+      array Member → Sections → Section[None] → Member[field] → Subelement[index] → StartValue
 
-    Returns the number of Subelements (array indices) written.
+    Returns the number of StartValues written.
     """
     dom = minidom.parse(xml_path)
 
@@ -155,47 +128,47 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
     if static_section is None:
         raise ValueError("Cannot find <Section Name='Static'> in exported DB XML.")
 
-    # Group: array_path → index → {field: value}
-    # Preserve insertion order so struct literal matches Excel row order
-    grouped: dict[str, dict[str, dict[str, str]]] = defaultdict(lambda: defaultdict(dict))
+    # Group: array_path → field_name → {index_str: value}
+    # Insertion order preserved so fields appear in Excel order
+    field_groups: dict[str, dict[str, dict[str, str]]] = defaultdict(lambda: defaultdict(dict))
 
     for upd in updates:
-        array_path    = upd["array_name"]
-        array_index   = str(upd["array_index"])
-        variable_name = upd["variable_name"]
-        default_value = upd["default_value"]
+        array_path = upd["array_name"]
+        idx        = str(upd["array_index"])
+        field      = upd["variable_name"]
+        value      = upd["default_value"]
 
-        grouped[array_path][array_index][variable_name] = default_value
+        field_groups[array_path][field][idx] = value
 
-        if variable_name.endswith("_SP"):
-            en_name = variable_name[:-3] + "_EN"
-            grouped[array_path][array_index][en_name] = "TRUE"
+        if field.endswith("_SP"):
+            en_field = field[:-3] + "_EN"
+            field_groups[array_path][en_field][idx] = "TRUE"
 
-    subelements_written = 0
+    written = 0
 
-    for array_path, index_map in grouped.items():
+    for array_path, field_map in field_groups.items():
         array_member, failed_part = _resolve_dotted_path(static_section, array_path)
         if array_member is None:
             print(f"    [WARN] Path '{array_path}' not found (failed at '{failed_part}') — skipping.")
             continue
 
-        stripped = _strip_setpoint_attribute(array_member)
-        if stripped:
-            print(f"    [DB]  Removed SetPoint attribute from '{array_path}' to allow start value import.")
+        # Build: array_member → Sections → Section[None]
+        sections    = _get_or_create(dom, array_member, "Sections")
+        section_none = _get_or_create(dom, sections, "Section", "Name", "None")
 
-        for array_index, fields in index_map.items():
-            struct_literal = _build_struct_literal(fields)
-            sub = _get_or_create_subelement(dom, array_member, array_index)
-            _set_start_value(dom, sub, struct_literal)
+        for field_name, index_map in field_map.items():
+            field_member = _get_or_create(dom, section_none, "Member", "Name", field_name)
 
-            for field, value in fields.items():
-                label = "auto" if field.endswith("_EN") else ""
-                suffix = f"  ({label})" if label else ""
-                print(f"    [DB]  {array_path}[{array_index}].{field} = {value}{suffix}")
-            subelements_written += 1
+            for idx, value in index_map.items():
+                subelement = _get_or_create(dom, field_member, "Subelement", "Path", idx)
+                _set_start_value(dom, subelement, value)
+
+                label = "  (auto)" if field_name.endswith("_EN") else ""
+                print(f"    [DB]  {array_path}[{idx}].{field_name} = {value}{label}")
+                written += 1
 
     xml_bytes: bytes = dom.toxml(encoding="utf-8")
     with open(xml_path, "wb") as fh:
         fh.write(xml_bytes)
 
-    return subelements_written
+    return written
