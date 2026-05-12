@@ -119,11 +119,9 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
 
         var_member = _child_element(subelement, "Member", "Name", variable_name)
         if var_member is None:
-            print(
-                f"    [WARN] Variable '{variable_name}' not found at "
-                f"'{array_path}[{array_index}]' — skipping."
-            )
-            continue
+            var_member = dom.createElement("Member")
+            var_member.setAttribute("Name", variable_name)
+            subelement.appendChild(var_member)
 
         _set_start_value(dom, var_member, default_value)
         print(f"    [DB]  {array_path}[{array_index}].{variable_name} = {default_value}")
@@ -133,11 +131,12 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
         if variable_name.endswith("_SP"):
             en_name = variable_name[:-3] + "_EN"
             en_member = _child_element(subelement, "Member", "Name", en_name)
-            if en_member is not None:
-                _set_start_value(dom, en_member, "true")
-                print(f"    [DB]  {array_path}[{array_index}].{en_name} = true  (auto)")
-            else:
-                print(f"    [WARN] '{en_name}' not found at index {array_index} — _EN not set.")
+            if en_member is None:
+                en_member = dom.createElement("Member")
+                en_member.setAttribute("Name", en_name)
+                subelement.appendChild(en_member)
+            _set_start_value(dom, en_member, "true")
+            print(f"    [DB]  {array_path}[{array_index}].{en_name} = true  (auto)")
 
     xml_bytes: bytes = dom.toxml(encoding="utf-8")
     with open(xml_path, "wb") as fh:
