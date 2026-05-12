@@ -61,6 +61,15 @@ def _get_or_create(dom: minidom.Document, parent, tag: str, attr: str = None, va
     return elem
 
 
+def _infer_datatype(field_name: str, sample_value: str) -> str:
+    """Infer Datatype for a new field Member based on name and value."""
+    if field_name.endswith("_EN"):
+        return "Bool"
+    if sample_value.strip().upper() in ("TRUE", "FALSE"):
+        return "Bool"
+    return "Real"
+
+
 def _set_start_value(dom: minidom.Document, subelement, value: str) -> None:
     sv = _child_element(subelement, "StartValue")
     if sv is None:
@@ -158,6 +167,8 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
 
         for field_name, index_map in field_map.items():
             field_member = _get_or_create(dom, section_none, "Member", "Name", field_name)
+            if not field_member.getAttribute("Datatype"):
+                field_member.setAttribute("Datatype", _infer_datatype(field_name, next(iter(index_map.values()))))
 
             for idx, value in index_map.items():
                 subelement = _get_or_create(dom, field_member, "Subelement", "Path", idx)
