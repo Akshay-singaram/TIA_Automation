@@ -18,15 +18,26 @@ from xml.dom import minidom
 
 
 def _child_element(parent, local_name: str, attr: str = None, val: str = None):
-    """Return the first direct child element matching local_name and optional attribute."""
+    """Return the first direct child element matching local_name and optional attribute.
+    Attribute value comparison is case-insensitive."""
     for node in parent.childNodes:
         if node.nodeType != node.ELEMENT_NODE:
             continue
         name = node.localName if node.localName else node.nodeName
         if name == local_name:
-            if attr is None or node.getAttribute(attr) == val:
+            if attr is None or node.getAttribute(attr).lower() == val.lower():
                 return node
     return None
+
+
+def _child_member_names(parent) -> list[str]:
+    """Return all direct child Member names — used in warnings."""
+    return [
+        node.getAttribute("Name")
+        for node in parent.childNodes
+        if node.nodeType == node.ELEMENT_NODE
+        and (node.localName or node.nodeName) == "Member"
+    ]
 
 
 def _find_static_section(dom: minidom.Document):
@@ -41,15 +52,19 @@ def _find_static_section(dom: minidom.Document):
 def _resolve_dotted_path(static_section, dot_path: str):
     """
     Navigate a dot-separated Member path from the Static section.
-    e.g. 'HMI_Params.HMI_Inputs.Statemachine_State'
-    Returns the final Member node (the array), or None if any part is missing.
+    e.g. 'HMI_Params.HMI_Inputs.StateMachine_State'
+    Name matching is case-insensitive.
+    Returns (final_node, None) on success, or (None, failed_part) on failure.
     """
     node = static_section
     for part in dot_path.split("."):
-        node = _child_element(node, "Member", "Name", part)
-        if node is None:
-            return None
-    return node
+        child = _child_element(node, "Member", "Name", part)
+        if child is None:
+            available = _child_member_names(node)
+            print(f"    [WARN] '{part}' not found. Available: {available}")
+            return None, part
+        node = child
+    return node, None
 
 
 def _set_start_value(dom: minidom.Document, member_node, value: str) -> None:
@@ -91,9 +106,9 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
         variable_name = upd["variable_name"]
         default_value = upd["default_value"]
 
-        array_member = _resolve_dotted_path(static_section, array_path)
+        array_member, failed_part = _resolve_dotted_path(static_section, array_path)
         if array_member is None:
-            print(f"    [WARN] Path '{array_path}' not found in DB — skipping.")
+            print(f"    [WARN] Path '{array_path}' not found (failed at '{failed_part}') — skipping.")
             continue
 
         subelement = _child_element(array_member, "Subelement", "Path", array_index)
