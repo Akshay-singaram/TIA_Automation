@@ -269,19 +269,17 @@ class TIASession:
 
     def import_db(self, xml_path: str, db_name: str) -> None:
         """
-        Delete the existing DB then reimport the modified XML.
+        Import the modified DB XML using Override (no delete).
+        InstanceDBs do not have the IOrdered CompileUnit constraint that FCs have,
+        so updating in-place via Override avoids the 'value cannot be changed'
+        error that occurs when TIA Portal creates a fresh InstanceDB.
         """
         import Siemens.Engineering as eng
         from System.IO import FileInfo
 
-        db_block, _ = self._find_block_recursive(self._plc_software.BlockGroup, db_name)
-        if db_block is not None:
-            db_block.Delete()
-            print(f"  [DB]  Deleted existing '{db_name}' for clean reimport.")
-
         group = self._fc_export_groups.get(db_name) or self._plc_software.BlockGroup
         group.Blocks.Import(FileInfo(xml_path), eng.ImportOptions.Override)
-        print(f"  [DB]  Reimported '{db_name}' from {xml_path}")
+        print(f"  [DB]  Updated '{db_name}' from {xml_path}")
 
     def compile(self):
         """Compile the PLC software and print all messages. Returns the CompilerResult."""
