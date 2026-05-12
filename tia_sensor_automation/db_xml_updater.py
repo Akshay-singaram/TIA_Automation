@@ -4,10 +4,14 @@ inside array-of-struct members.
 
 XML path for each update:
   Section[Name=Static]
-    → Member[Name=array_name]          (the array)
-      → Subelement[Path=array_index]   (the struct instance at that index)
-        → Member[Name=variable_name]   (the struct field)
-          → StartValue                 (the default value text)
+    → Member[Name=part1]                 (dot-separated path, e.g. HMI_Params)
+      → Member[Name=part2]              (e.g. HMI_Inputs)
+        → Member[Name=part3]            (e.g. Statemachine_State  ← the array)
+          → Subelement[Path=index]
+            → Member[Name=variable_SP]
+                → StartValue            set to default_value
+            → Member[Name=variable_EN]  (auto-set to true when variable ends in _SP)
+                → StartValue            set to true
 """
 
 from xml.dom import minidom
@@ -34,6 +38,20 @@ def _find_static_section(dom: minidom.Document):
     return None
 
 
+def _resolve_dotted_path(static_section, dot_path: str):
+    """
+    Navigate a dot-separated Member path from the Static section.
+    e.g. 'HMI_Params.HMI_Inputs.Statemachine_State'
+    Returns the final Member node (the array), or None if any part is missing.
+    """
+    node = static_section
+    for part in dot_path.split("."):
+        node = _child_element(node, "Member", "Name", part)
+        if node is None:
+            return None
+    return node
+
+
 def _set_start_value(dom: minidom.Document, member_node, value: str) -> None:
     sv = _child_element(member_node, "StartValue")
     if sv is None:
@@ -49,12 +67,16 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
     Apply default-value updates to the exported DB XML at xml_path and overwrite it.
 
     Each entry in updates must have:
-      array_name    — name of the array Member in the Static section
+      array_name    — dot-separated path to the array Member (e.g. HMI_Params.HMI_Inputs.Statemachine_State)
       array_index   — integer index into the array
-      variable_name — name of the struct field within that element
-      default_value — string representation of the new StartValue
+      variable_name — struct field name ending in _SP (e.g. HHH_SP)
+      default_value — string value for that field's StartValue
 
-    Returns the number of StartValues successfully updated.
+    When variable_name ends in _SP, the sibling _EN variable is automatically
+    set to true in the same struct instance.
+
+    Returns the number of _SP StartValues successfully updated (each _EN set
+    is not counted separately).
     """
     dom = minidom.parse(xml_path)
 
@@ -64,14 +86,14 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
 
     updated = 0
     for upd in updates:
-        array_name    = upd["array_name"]
+        array_path    = upd["array_name"]
         array_index   = str(upd["array_index"])
         variable_name = upd["variable_name"]
         default_value = upd["default_value"]
 
-        array_member = _child_element(static_section, "Member", "Name", array_name)
+        array_member = _resolve_dotted_path(static_section, array_path)
         if array_member is None:
-            print(f"    [WARN] Array '{array_name}' not found in DB — skipping.")
+            print(f"    [WARN] Path '{array_path}' not found in DB — skipping.")
             continue
 
         subelement = _child_element(array_member, "Subelement", "Path", array_index)
@@ -84,13 +106,23 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
         if var_member is None:
             print(
                 f"    [WARN] Variable '{variable_name}' not found at "
-                f"'{array_name}[{array_index}]' — skipping."
+                f"'{array_path}[{array_index}]' — skipping."
             )
             continue
 
         _set_start_value(dom, var_member, default_value)
-        print(f"    [DB]  {array_name}[{array_index}].{variable_name} = {default_value}")
+        print(f"    [DB]  {array_path}[{array_index}].{variable_name} = {default_value}")
         updated += 1
+
+        # Auto-set the corresponding _EN variable to true
+        if variable_name.endswith("_SP"):
+            en_name = variable_name[:-3] + "_EN"
+            en_member = _child_element(subelement, "Member", "Name", en_name)
+            if en_member is not None:
+                _set_start_value(dom, en_member, "true")
+                print(f"    [DB]  {array_path}[{array_index}].{en_name} = true  (auto)")
+            else:
+                print(f"    [WARN] '{en_name}' not found at index {array_index} — _EN not set.")
 
     xml_bytes: bytes = dom.toxml(encoding="utf-8")
     with open(xml_path, "wb") as fh:
