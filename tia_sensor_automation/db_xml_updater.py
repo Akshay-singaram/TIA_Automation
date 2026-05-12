@@ -1,21 +1,24 @@
 """
-Parse an exported GlobalDB SimaticML XML and update <StartValue> elements
-inside array-of-struct members.
+Parse an exported GlobalDB/InstanceDB SimaticML XML and update <StartValue>
+elements inside array-of-struct members.
 
-For an array of UDT/struct, TIA Portal encodes both the array index AND the
-struct field name in the Subelement Path attribute (dot-separated):
+TIA Portal's IndexPath_TP only allows numeric indices in the Subelement Path,
+and Subelement may only contain StartValue (not Member children). For an
+Array of UDT/Struct, individual field defaults are expressed as an IEC 61131-3
+struct literal in the single StartValue of the numeric-indexed Subelement:
 
   Section[Name=Static]
-    → Member[Name=part1]                      (dot-separated path to array)
+    → Member[Name=part1]                   (dot-separated path to array)
       → Member[Name=part2]
-        → Member[Name=array_name]             (the array itself)
-          → Subelement[Path="index.FieldName"]
-              → StartValue                    ← the default value
+        → Member[Name=array_name]          (the array itself)
+          → Subelement[Path="0"]           (numeric index only)
+              → StartValue                 "(HHH_SP:=588, HHH_EN:=TRUE)"
 
-Example: HMI_Params.HMI_Inputs.StateMachine_State[0].HHH_SP
-  Path attribute = "0.HHH_SP"
+Multiple Excel rows targeting the same (array, index) are merged into one
+struct literal before writing.
 """
 
+from collections import defaultdict
 from xml.dom import minidom
 
 
@@ -76,7 +79,7 @@ def _set_start_value(dom: minidom.Document, parent_node, value: str) -> None:
         sv = dom.createElement("StartValue")
         parent_node.appendChild(sv)
     for child in list(sv.childNodes):
-        parent_node.removeChild(child) if False else sv.removeChild(child)
+        sv.removeChild(child)
     sv.appendChild(dom.createTextNode(value))
 
 
@@ -90,6 +93,15 @@ def _get_or_create_subelement(dom: minidom.Document, array_member, path: str):
     return sub
 
 
+def _build_struct_literal(fields: dict[str, str]) -> str:
+    """
+    Build an IEC 61131-3 struct literal from a field→value dict.
+    e.g. {'HHH_SP': '588', 'HHH_EN': 'TRUE'} → '(HHH_SP:=588, HHH_EN:=TRUE)'
+    """
+    parts = ", ".join(f"{k}:={v}" for k, v in fields.items())
+    return f"({parts})"
+
+
 def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
     """
     Apply default-value updates to the exported DB XML at xml_path and overwrite it.
@@ -98,16 +110,16 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
       array_name    — dot-separated path to the array Member
                       (e.g. HMI_Params.HMI_Inputs.StateMachine_State)
       array_index   — integer index into the array
-      variable_name — struct field name ending in _SP (e.g. HHH_SP)
-      default_value — string value for that field's StartValue
-
-    TIA Portal encodes the field path as "index.FieldName" in the Subelement
-    Path attribute — Member elements are not allowed inside Subelement.
+      variable_name — struct field name (e.g. HHH_SP)
+      default_value — value string for that field
 
     When variable_name ends in _SP, the sibling _EN field is automatically
-    set to true in the same Subelement group.
+    included in the struct literal with value TRUE.
 
-    Returns the number of _SP StartValues successfully updated.
+    Multiple rows targeting the same (array_path, array_index) are merged
+    into a single struct literal: (HHH_SP:=588, HHH_EN:=TRUE, HH_SP:=150, ...).
+
+    Returns the number of Subelements (array indices) written.
     """
     dom = minidom.parse(xml_path)
 
@@ -115,35 +127,43 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
     if static_section is None:
         raise ValueError("Cannot find <Section Name='Static'> in exported DB XML.")
 
-    updated = 0
+    # Group: array_path → index → {field: value}
+    # Preserve insertion order so struct literal matches Excel row order
+    grouped: dict[str, dict[str, dict[str, str]]] = defaultdict(lambda: defaultdict(dict))
+
     for upd in updates:
         array_path    = upd["array_name"]
         array_index   = str(upd["array_index"])
         variable_name = upd["variable_name"]
         default_value = upd["default_value"]
 
+        grouped[array_path][array_index][variable_name] = default_value
+
+        if variable_name.endswith("_SP"):
+            en_name = variable_name[:-3] + "_EN"
+            grouped[array_path][array_index][en_name] = "TRUE"
+
+    subelements_written = 0
+
+    for array_path, index_map in grouped.items():
         array_member, failed_part = _resolve_dotted_path(static_section, array_path)
         if array_member is None:
             print(f"    [WARN] Path '{array_path}' not found (failed at '{failed_part}') — skipping.")
             continue
 
-        # Path encodes both index and field: "0.HHH_SP"
-        sp_path = f"{array_index}.{variable_name}"
-        sp_sub = _get_or_create_subelement(dom, array_member, sp_path)
-        _set_start_value(dom, sp_sub, default_value)
-        print(f"    [DB]  {array_path}[{array_index}].{variable_name} = {default_value}")
-        updated += 1
+        for array_index, fields in index_map.items():
+            struct_literal = _build_struct_literal(fields)
+            sub = _get_or_create_subelement(dom, array_member, array_index)
+            _set_start_value(dom, sub, struct_literal)
 
-        # Auto-set the corresponding _EN field to true
-        if variable_name.endswith("_SP"):
-            en_name = variable_name[:-3] + "_EN"
-            en_path = f"{array_index}.{en_name}"
-            en_sub = _get_or_create_subelement(dom, array_member, en_path)
-            _set_start_value(dom, en_sub, "true")
-            print(f"    [DB]  {array_path}[{array_index}].{en_name} = true  (auto)")
+            for field, value in fields.items():
+                label = "auto" if field.endswith("_EN") else ""
+                suffix = f"  ({label})" if label else ""
+                print(f"    [DB]  {array_path}[{array_index}].{field} = {value}{suffix}")
+            subelements_written += 1
 
     xml_bytes: bytes = dom.toxml(encoding="utf-8")
     with open(xml_path, "wb") as fh:
         fh.write(xml_bytes)
 
-    return updated
+    return subelements_written
