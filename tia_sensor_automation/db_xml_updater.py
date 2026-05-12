@@ -54,6 +54,34 @@ def _find_static_section(dom: minidom.Document):
     return None
 
 
+def _strip_setpoint_attribute(member_node) -> bool:
+    """
+    Remove the SetPoint BooleanAttribute from a Member's AttributeList.
+    TIA Portal blocks Openness import of start values for SetPoint=true variables.
+    Since the attribute is SystemDefined, TIA Portal re-applies it from the FB
+    after import, but this allows the start values to be written first.
+    Returns True if the attribute was found and removed.
+    """
+    attr_list = _child_element(member_node, "AttributeList")
+    if attr_list is None:
+        return False
+
+    to_remove = [
+        node for node in attr_list.childNodes
+        if node.nodeType == node.ELEMENT_NODE
+        and (node.localName or node.nodeName) == "BooleanAttribute"
+        and node.getAttribute("Name") == "SetPoint"
+    ]
+    for node in to_remove:
+        attr_list.removeChild(node)
+
+    # Drop empty AttributeList
+    if not any(n.nodeType == n.ELEMENT_NODE for n in attr_list.childNodes):
+        member_node.removeChild(attr_list)
+
+    return bool(to_remove)
+
+
 def _resolve_dotted_path(static_section, dot_path: str):
     """
     Navigate a dot-separated Member path from the Static section.
@@ -150,6 +178,10 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
         if array_member is None:
             print(f"    [WARN] Path '{array_path}' not found (failed at '{failed_part}') — skipping.")
             continue
+
+        stripped = _strip_setpoint_attribute(array_member)
+        if stripped:
+            print(f"    [DB]  Removed SetPoint attribute from '{array_path}' to allow start value import.")
 
         for array_index, fields in index_map.items():
             struct_literal = _build_struct_literal(fields)
