@@ -76,10 +76,13 @@ def main() -> int:
 
             _step(2, "Attached to TIA Portal V19")
 
+            _step(3, "Compiling (ensures DBs are consistent before export)")
+            session.compile()
+
             total_updated = 0
 
             for db_name, db_rows in groups.items():
-                _step(f"3/{db_name}", f"Processing '{db_name}'")
+                _step(f"4/{db_name}", f"Processing '{db_name}'")
 
                 xml_path = session.export_db(db_name)
 
@@ -89,12 +92,12 @@ def main() -> int:
 
                 session.import_db(xml_path, db_name)
 
-            _step(4, "Compiling")
+            _step(5, "Final compile")
             result = session.compile()
             if result.ErrorCount > 0:
                 print(f"  WARNING: {result.ErrorCount} compile error(s) — review messages above.")
 
-            _step(5, "Saving project")  # triggered by TIASession.__exit__
+            _step(6, "Saving project")  # triggered by TIASession.__exit__
 
     except RuntimeError as exc:
         print(f"\n  RUNTIME ERROR:\n{textwrap.indent(str(exc), '    ')}")
