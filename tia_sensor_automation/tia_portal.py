@@ -251,7 +251,13 @@ class TIASession:
         """
         Export the named GlobalDB as SimaticML XML.
         Returns the path to the exported file.
+
+        If TIA Portal refuses to export because the block is inconsistent
+        (e.g. a previous run imported bad values), the existing XML file
+        from the last run is reused so the caller can patch and re-import
+        to restore a consistent state.
         """
+        import shutil
         import Siemens.Engineering as eng
         from System.IO import FileInfo
 
@@ -261,10 +267,27 @@ class TIASession:
         self._fc_export_groups[db_name] = parent_group
 
         export_path = os.path.join(EXPORT_DIR, f"{db_name}.xml")
+        backup_path = export_path + ".bak"
+
+        # Back up the existing file so we can restore it if export fails
         if os.path.exists(export_path):
+            shutil.copy2(export_path, backup_path)
             os.remove(export_path)
-        db_block.Export(FileInfo(export_path), eng.ExportOptions(0))
-        print(f"  [DB]  Exported '{db_name}' → {export_path}")
+
+        try:
+            db_block.Export(FileInfo(export_path), eng.ExportOptions(0))
+            print(f"  [DB]  Exported '{db_name}' → {export_path}")
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
+        except Exception as exc:
+            if "Inconsistent" in str(exc) and os.path.exists(backup_path):
+                shutil.move(backup_path, export_path)
+                print(f"  [DB]  WARNING: '{db_name}' is inconsistent — reusing previous XML to self-heal.")
+            else:
+                if os.path.exists(backup_path):
+                    shutil.move(backup_path, export_path)
+                raise
+
         return export_path
 
     def import_db(self, xml_path: str, db_name: str) -> None:
