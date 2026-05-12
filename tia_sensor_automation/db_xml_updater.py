@@ -70,6 +70,16 @@ def _infer_datatype(field_name: str, sample_value: str) -> str:
     return "Real"
 
 
+def _ensure_decimal(value: str) -> str:
+    """Return value with a decimal point, e.g. '588' → '588.0'. Non-numeric strings pass through."""
+    if "." not in value:
+        try:
+            return f"{float(value):.1f}"
+        except (ValueError, TypeError):
+            pass
+    return value
+
+
 def _set_start_value(dom: minidom.Document, subelement, value: str) -> None:
     sv = _child_element(subelement, "StartValue")
     if sv is None:
@@ -148,10 +158,7 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
         value      = upd["default_value"]
 
         if field.endswith("_SP"):
-            try:
-                value = f"{float(value):.1f}" if "." not in str(value) else str(value)
-            except (ValueError, TypeError):
-                pass
+            value = _ensure_decimal(str(value))
             en_field = field[:-3] + "_EN"
             field_groups[array_path][en_field][idx] = "TRUE"
 
@@ -181,6 +188,27 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
                 label = "  (auto)" if field_name.endswith("_EN") else ""
                 print(f"    [DB]  {array_path}[{idx}].{field_name} = {value}{label}")
                 written += 1
+
+    # Normalize any pre-existing _SP StartValues in the whole document
+    # (covers values already in TIA Portal's export that we didn't rewrite above)
+    for section in dom.getElementsByTagName("Section"):
+        if section.getAttribute("Name") != "None":
+            continue
+        for node in section.childNodes:
+            if node.nodeType != node.ELEMENT_NODE:
+                continue
+            if (node.localName or node.nodeName) != "Member":
+                continue
+            if not node.getAttribute("Name").endswith("_SP"):
+                continue
+            for sub in node.childNodes:
+                if sub.nodeType != sub.ELEMENT_NODE:
+                    continue
+                if (sub.localName or sub.nodeName) != "Subelement":
+                    continue
+                sv = _child_element(sub, "StartValue")
+                if sv and sv.firstChild:
+                    sv.firstChild.nodeValue = _ensure_decimal(sv.firstChild.nodeValue)
 
     xml_bytes: bytes = dom.toxml(encoding="utf-8")
     with open(xml_path, "wb") as fh:
