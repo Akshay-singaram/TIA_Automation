@@ -8,12 +8,20 @@ TIA_DLL_PATH = (
 
 # === Excel input ===
 EXCEL_FILE_PATH = os.path.join(os.path.dirname(__file__), "sensors.xlsx")
+DB_DEFAULTS_EXCEL_PATH = os.path.join(os.path.dirname(__file__), "db_defaults.xlsx")
 
-# === Excel column headers ===
+# === Excel column headers (sensors.xlsx) ===
 COL_SENSOR_NAME  = "Sensor_Name"
 COL_SOURCE_FB    = "Source_FB"
 COL_TARGET_FC    = "Target_FC"
 COL_BLOCK_GROUP  = "Block_Group"
+
+# === Excel column headers (db_defaults.xlsx) ===
+COL_DB_NAME       = "DB_Name"
+COL_ARRAY_NAME    = "Array_Name"
+COL_ARRAY_INDEX   = "Array_Index"
+COL_VARIABLE_NAME = "Variable_Name"
+COL_DEFAULT_VALUE = "Default_Value"
 
 # === Runtime export directory ===
 EXPORT_DIR = os.path.join(os.path.dirname(__file__), "exports")

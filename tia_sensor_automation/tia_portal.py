@@ -247,6 +247,42 @@ class TIASession:
         group.Blocks.Import(FileInfo(xml_path), eng.ImportOptions.Override)
         print(f"  [FC]  Reimported '{fc_name}' from {xml_path}")
 
+    def export_db(self, db_name: str) -> str:
+        """
+        Export the named GlobalDB as SimaticML XML.
+        Returns the path to the exported file.
+        """
+        import Siemens.Engineering as eng
+        from System.IO import FileInfo
+
+        db_block, parent_group = self._find_block_recursive(self._plc_software.BlockGroup, db_name)
+        if db_block is None:
+            raise ValueError(f"DB '{db_name}' not found in the project.")
+        self._fc_export_groups[db_name] = parent_group
+
+        export_path = os.path.join(EXPORT_DIR, f"{db_name}.xml")
+        if os.path.exists(export_path):
+            os.remove(export_path)
+        db_block.Export(FileInfo(export_path), eng.ExportOptions(0))
+        print(f"  [DB]  Exported '{db_name}' → {export_path}")
+        return export_path
+
+    def import_db(self, xml_path: str, db_name: str) -> None:
+        """
+        Delete the existing DB then reimport the modified XML.
+        """
+        import Siemens.Engineering as eng
+        from System.IO import FileInfo
+
+        db_block, _ = self._find_block_recursive(self._plc_software.BlockGroup, db_name)
+        if db_block is not None:
+            db_block.Delete()
+            print(f"  [DB]  Deleted existing '{db_name}' for clean reimport.")
+
+        group = self._fc_export_groups.get(db_name) or self._plc_software.BlockGroup
+        group.Blocks.Import(FileInfo(xml_path), eng.ImportOptions.Override)
+        print(f"  [DB]  Reimported '{db_name}' from {xml_path}")
+
     def compile(self):
         """Compile the PLC software and print all messages. Returns the CompilerResult."""
         import Siemens.Engineering.Compiler as compiler_ns
