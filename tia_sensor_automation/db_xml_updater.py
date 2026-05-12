@@ -2,23 +2,25 @@
 Parse an exported GlobalDB SimaticML XML and update <StartValue> elements
 inside array-of-struct members.
 
-XML path for each update:
+For an array of UDT/struct, TIA Portal encodes both the array index AND the
+struct field name in the Subelement Path attribute (dot-separated):
+
   Section[Name=Static]
-    → Member[Name=part1]                 (dot-separated path, e.g. HMI_Params)
-      → Member[Name=part2]              (e.g. HMI_Inputs)
-        → Member[Name=part3]            (e.g. Statemachine_State  ← the array)
-          → Subelement[Path=index]
-            → Member[Name=variable_SP]
-                → StartValue            set to default_value
-            → Member[Name=variable_EN]  (auto-set to true when variable ends in _SP)
-                → StartValue            set to true
+    → Member[Name=part1]                      (dot-separated path to array)
+      → Member[Name=part2]
+        → Member[Name=array_name]             (the array itself)
+          → Subelement[Path="index.FieldName"]
+              → StartValue                    ← the default value
+
+Example: HMI_Params.HMI_Inputs.StateMachine_State[0].HHH_SP
+  Path attribute = "0.HHH_SP"
 """
 
 from xml.dom import minidom
 
 
 def _child_element(parent, local_name: str, attr: str = None, val: str = None):
-    """Return the first direct child element matching local_name and optional attribute.
+    """Return the first direct child element matching local_name.
     Attribute value comparison is case-insensitive."""
     for node in parent.childNodes:
         if node.nodeType != node.ELEMENT_NODE:
@@ -67,14 +69,25 @@ def _resolve_dotted_path(static_section, dot_path: str):
     return node, None
 
 
-def _set_start_value(dom: minidom.Document, member_node, value: str) -> None:
-    sv = _child_element(member_node, "StartValue")
+def _set_start_value(dom: minidom.Document, parent_node, value: str) -> None:
+    """Set or create <StartValue> text inside parent_node."""
+    sv = _child_element(parent_node, "StartValue")
     if sv is None:
         sv = dom.createElement("StartValue")
-        member_node.appendChild(sv)
+        parent_node.appendChild(sv)
     for child in list(sv.childNodes):
-        sv.removeChild(child)
+        parent_node.removeChild(child) if False else sv.removeChild(child)
     sv.appendChild(dom.createTextNode(value))
+
+
+def _get_or_create_subelement(dom: minidom.Document, array_member, path: str):
+    """Find or create <Subelement Path="path"> under array_member."""
+    sub = _child_element(array_member, "Subelement", "Path", path)
+    if sub is None:
+        sub = dom.createElement("Subelement")
+        sub.setAttribute("Path", path)
+        array_member.appendChild(sub)
+    return sub
 
 
 def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
@@ -82,16 +95,19 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
     Apply default-value updates to the exported DB XML at xml_path and overwrite it.
 
     Each entry in updates must have:
-      array_name    — dot-separated path to the array Member (e.g. HMI_Params.HMI_Inputs.Statemachine_State)
+      array_name    — dot-separated path to the array Member
+                      (e.g. HMI_Params.HMI_Inputs.StateMachine_State)
       array_index   — integer index into the array
       variable_name — struct field name ending in _SP (e.g. HHH_SP)
       default_value — string value for that field's StartValue
 
-    When variable_name ends in _SP, the sibling _EN variable is automatically
-    set to true in the same struct instance.
+    TIA Portal encodes the field path as "index.FieldName" in the Subelement
+    Path attribute — Member elements are not allowed inside Subelement.
 
-    Returns the number of _SP StartValues successfully updated (each _EN set
-    is not counted separately).
+    When variable_name ends in _SP, the sibling _EN field is automatically
+    set to true in the same Subelement group.
+
+    Returns the number of _SP StartValues successfully updated.
     """
     dom = minidom.parse(xml_path)
 
@@ -111,31 +127,19 @@ def update_db_defaults(xml_path: str, updates: list[dict]) -> int:
             print(f"    [WARN] Path '{array_path}' not found (failed at '{failed_part}') — skipping.")
             continue
 
-        subelement = _child_element(array_member, "Subelement", "Path", array_index)
-        if subelement is None:
-            subelement = dom.createElement("Subelement")
-            subelement.setAttribute("Path", array_index)
-            array_member.appendChild(subelement)
-
-        var_member = _child_element(subelement, "Member", "Name", variable_name)
-        if var_member is None:
-            var_member = dom.createElement("Member")
-            var_member.setAttribute("Name", variable_name)
-            subelement.appendChild(var_member)
-
-        _set_start_value(dom, var_member, default_value)
+        # Path encodes both index and field: "0.HHH_SP"
+        sp_path = f"{array_index}.{variable_name}"
+        sp_sub = _get_or_create_subelement(dom, array_member, sp_path)
+        _set_start_value(dom, sp_sub, default_value)
         print(f"    [DB]  {array_path}[{array_index}].{variable_name} = {default_value}")
         updated += 1
 
-        # Auto-set the corresponding _EN variable to true
+        # Auto-set the corresponding _EN field to true
         if variable_name.endswith("_SP"):
             en_name = variable_name[:-3] + "_EN"
-            en_member = _child_element(subelement, "Member", "Name", en_name)
-            if en_member is None:
-                en_member = dom.createElement("Member")
-                en_member.setAttribute("Name", en_name)
-                subelement.appendChild(en_member)
-            _set_start_value(dom, en_member, "true")
+            en_path = f"{array_index}.{en_name}"
+            en_sub = _get_or_create_subelement(dom, array_member, en_path)
+            _set_start_value(dom, en_sub, "true")
             print(f"    [DB]  {array_path}[{array_index}].{en_name} = true  (auto)")
 
     xml_bytes: bytes = dom.toxml(encoding="utf-8")
