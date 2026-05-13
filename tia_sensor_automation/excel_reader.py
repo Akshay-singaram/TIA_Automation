@@ -117,12 +117,15 @@ def read_db_default_rows(file_path: str | None = None) -> list[dict]:
             raise ValueError(
                 f"Array_Index must be an integer, got: {row[idx[COL_ARRAY_INDEX]]!r}"
             )
+        default_value = row[idx[COL_DEFAULT_VALUE]]
+        if default_value is None or str(default_value).strip() == "":
+            continue
         rows.append({
             "db_name":       str(db_name).strip(),
             "array_name":    str(row[idx[COL_ARRAY_NAME]]).strip(),
             "array_index":   array_index,
             "variable_name": str(row[idx[COL_VARIABLE_NAME]]).strip(),
-            "default_value": str(row[idx[COL_DEFAULT_VALUE]]).strip(),
+            "default_value": str(default_value).strip(),
         })
 
     wb.close()
