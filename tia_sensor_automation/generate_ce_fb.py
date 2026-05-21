@@ -90,22 +90,33 @@ def read_excel_mapping() -> dict[str, list[int]]:
     headers = rows[0]
     groups: dict[str, list[int]] = defaultdict(list)
 
-    for row_idx, row in enumerate(rows[1:], 1):
+    for row in rows[1:]:
+        # Use the actual cause number from column 0, not the row position
+        cause_raw = row[0] if row and len(row) > 0 else None
+        if cause_raw is None or str(cause_raw).strip() == "":
+            continue
+        try:
+            rs_idx = int(cause_raw)
+        except (TypeError, ValueError):
+            continue
+
         assigned = False
         for col_i, col_name in enumerate(headers[1:], 1):
             cell = row[col_i] if col_i < len(row) else None
             if cell is not None and str(cell).strip():
                 raw = str(col_name) if col_name else ""
                 out = _COL_SANITIZE.get(raw, raw.strip().replace(" ", "_"))
-                groups[out].append(row_idx)
+                groups[out].append(rs_idx)
                 assigned = True
                 break
         if not assigned:
-            groups[UNASSIGNED].append(row_idx)
+            groups[UNASSIGNED].append(rs_idx)
 
-    excel_row_count = len(rows) - 1
-    for i in range(excel_row_count + 1, COUNT + 1):
-        groups[UNASSIGNED].append(i)
+    # Causes not in the Excel (e.g. 170..200) → Unassigned
+    assigned_all = {idx for idxs in groups.values() for idx in idxs}
+    for i in range(1, COUNT + 1):
+        if i not in assigned_all:
+            groups[UNASSIGNED].append(i)
 
     return dict(groups)
 
