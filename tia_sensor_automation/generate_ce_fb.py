@@ -97,6 +97,8 @@ def _build_flgnet() -> str:
 
     parts: list[str] = []
     wires: list[str] = []
+    # UIDs of every contact that connects directly to the single powerrail
+    powerrail_targets: list[tuple[int, int]] = []  # (reset_contact_uid, enable_contact_uid)
 
     for i in range(1, COUNT + 1):
         # --- Accesses ---
@@ -117,8 +119,9 @@ def _build_flgnet() -> str:
         p_rs       = u()
         p_coil_csd = u()
 
-        # --- Wire UIDs ---
-        w_pr       = u()   # powerrail → reset contact.in + enable contact.in
+        powerrail_targets.append((p_c_reset, p_c_enable))
+
+        # --- Wire UIDs (no per-iteration powerrail wire) ---
         w_rst_op   = u()   # reset access → reset contact.operand
         w_rst_r    = u()   # reset contact.out → rs.r
         w_en_op    = u()   # enable access → enable contact.operand
@@ -154,12 +157,6 @@ def _build_flgnet() -> str:
         ]
 
         wires += [
-            f'    <Wire UId="{w_pr}">\n'
-            f'      <Powerrail />\n'
-            f'      <NameCon UId="{p_c_reset}" Name="in" />\n'
-            f'      <NameCon UId="{p_c_enable}" Name="in" />\n'
-            f'    </Wire>',
-
             f'    <Wire UId="{w_rst_op}">\n'
             f'      <IdentCon UId="{a_reset}" />\n'
             f'      <NameCon UId="{p_c_reset}" Name="operand" />\n'
@@ -225,6 +222,15 @@ def _build_flgnet() -> str:
             f'      <NameCon UId="{p_coil_csd}" Name="operand" />\n'
             f'    </Wire>',
         ]
+
+    # Single powerrail wire fanning out to all reset + enable contacts
+    w_pr = u()
+    pr_lines = [f'    <Wire UId="{w_pr}">', '      <Powerrail />']
+    for p_c_reset, p_c_enable in powerrail_targets:
+        pr_lines.append(f'      <NameCon UId="{p_c_reset}" Name="in" />')
+        pr_lines.append(f'      <NameCon UId="{p_c_enable}" Name="in" />')
+    pr_lines.append('    </Wire>')
+    wires.insert(0, '\n'.join(pr_lines))
 
     return (
         f'<FlgNet xmlns="{FLGNET_NS}">\n'
