@@ -8,9 +8,6 @@ Example: python export_fb_only.py Cause_n_Effect
 import os
 import sys
 
-import Siemens.Engineering as eng
-from System.IO import FileInfo
-
 from config import EXPORT_DIR
 from tia_portal import TIASession
 
@@ -22,6 +19,9 @@ if len(sys.argv) < 2:
 block_name = sys.argv[1]
 
 with TIASession() as session:
+    import Siemens.Engineering as eng
+    from System.IO import FileInfo
+
     block, _ = session._find_block_recursive(session._plc_software.BlockGroup, block_name)
     if block is None:
         print(f"ERROR: Block '{block_name}' not found in the project.")
