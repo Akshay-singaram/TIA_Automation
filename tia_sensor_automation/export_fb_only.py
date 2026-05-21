@@ -22,6 +22,9 @@ with TIASession() as session:
     import Siemens.Engineering as eng
     from System.IO import FileInfo
 
+    print("Compiling first to ensure blocks are consistent...")
+    session.compile()
+
     block, _ = session._find_block_recursive(session._plc_software.BlockGroup, block_name)
     if block is None:
         print(f"ERROR: Block '{block_name}' not found in the project.")
