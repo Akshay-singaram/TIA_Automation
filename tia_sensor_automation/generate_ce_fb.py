@@ -213,38 +213,64 @@ def _build_flgnet() -> str:
             f'    </Wire>',
         ]
 
-    # --- OR block, CSD access, CSD coil (shared across all iterations) ---
-    a_csd      = u()
-    p_or       = u()
+    # --- Two-level OR tree (max 100 inputs per OR block) ---
+    # OR_A: RS[1..100].q,  OR_B: RS[101..200].q,  OR_Final: OR_A.out + OR_B.out
+    OR_MAX   = 100
+    a_csd    = u()
+    p_or_a   = u()
+    p_or_b   = u()
+    p_or_fin = u()
     p_coil_csd = u()
 
+    half = COUNT // 2  # 100
     parts += [
         _var_access(a_csd, "CSD"),
-        f'    <Part Name="O" UId="{p_or}">\n'
-        f'      <TemplateValue Name="Card" Type="Cardinality">{COUNT}</TemplateValue>\n'
+        f'    <Part Name="O" UId="{p_or_a}">\n'
+        f'      <TemplateValue Name="Card" Type="Cardinality">{half}</TemplateValue>\n'
+        f'    </Part>',
+        f'    <Part Name="O" UId="{p_or_b}">\n'
+        f'      <TemplateValue Name="Card" Type="Cardinality">{COUNT - half}</TemplateValue>\n'
+        f'    </Part>',
+        f'    <Part Name="O" UId="{p_or_fin}">\n'
+        f'      <TemplateValue Name="Card" Type="Cardinality">2</TemplateValue>\n'
         f'    </Part>',
         f'    <Part Name="Coil" UId="{p_coil_csd}" />',
     ]
 
-    # RS[i].q → OR.in{i}
+    # RS[1..100].q → OR_A.in{i},  RS[101..200].q → OR_B.in{i}
     for i, rs_uid in enumerate(rs_uids, 1):
         w = u()
+        if i <= half:
+            or_uid, pin = p_or_a, i
+        else:
+            or_uid, pin = p_or_b, i - half
         wires.append(
             f'    <Wire UId="{w}">\n'
             f'      <NameCon UId="{rs_uid}" Name="q" />\n'
-            f'      <NameCon UId="{p_or}" Name="in{i}" />\n'
+            f'      <NameCon UId="{or_uid}" Name="in{pin}" />\n'
             f'    </Wire>'
         )
 
-    # OR.out → CSD coil, CSD access → CSD coil operand
-    w_or_coil = u()
-    w_csd_op  = u()
+    # OR_A.out → OR_Final.in1,  OR_B.out → OR_Final.in2
+    w_a = u();  w_b = u()
+    wires += [
+        f'    <Wire UId="{w_a}">\n'
+        f'      <NameCon UId="{p_or_a}" Name="out" />\n'
+        f'      <NameCon UId="{p_or_fin}" Name="in1" />\n'
+        f'    </Wire>',
+        f'    <Wire UId="{w_b}">\n'
+        f'      <NameCon UId="{p_or_b}" Name="out" />\n'
+        f'      <NameCon UId="{p_or_fin}" Name="in2" />\n'
+        f'    </Wire>',
+    ]
+
+    # OR_Final.out → CSD coil, CSD access → CSD coil operand
+    w_or_coil = u();  w_csd_op = u()
     wires += [
         f'    <Wire UId="{w_or_coil}">\n'
-        f'      <NameCon UId="{p_or}" Name="out" />\n'
+        f'      <NameCon UId="{p_or_fin}" Name="out" />\n'
         f'      <NameCon UId="{p_coil_csd}" Name="in" />\n'
         f'    </Wire>',
-
         f'    <Wire UId="{w_csd_op}">\n'
         f'      <IdentCon UId="{a_csd}" />\n'
         f'      <NameCon UId="{p_coil_csd}" Name="operand" />\n'
