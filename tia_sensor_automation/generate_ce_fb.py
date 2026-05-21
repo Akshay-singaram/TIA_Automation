@@ -33,6 +33,11 @@ FLGNET_NS = "http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/
 # Interface XML builder
 # ---------------------------------------------------------------------------
 
+def _enable_cause_name(i: int) -> str:
+    """Match TIA Portal's existing naming: capital C for index 1, lowercase for 2+."""
+    return "Enable_Cause_1" if i == 1 else f"Enable_cause_{i}"
+
+
 def _build_interface() -> str:
     lines = [f'<Sections xmlns="{IFACE_NS}">', '  <Section Name="Input">']
     for i in range(1, COUNT + 1):
@@ -40,7 +45,7 @@ def _build_interface() -> str:
     lines.append(f'    <Member Name="InterlockReset" Datatype="Array[1..{COUNT}] of Bool" />')
     lines.append(f'    <Member Name="InterlockBypass" Datatype="Array[1..{COUNT}] of Bool" />')
     for i in range(1, COUNT + 1):
-        lines.append(f'    <Member Name="Enable_Cause_{i}" Datatype="Bool" />')
+        lines.append(f'    <Member Name="{_enable_cause_name(i)}" Datatype="Bool" />')
     lines += [
         '  </Section>',
         '  <Section Name="Output">',
@@ -97,18 +102,17 @@ def _build_flgnet() -> str:
 
     parts: list[str] = []
     wires: list[str] = []
-    # UIDs of every contact that connects directly to the single powerrail
     powerrail_targets: list[tuple[int, int]] = []  # (reset_contact_uid, enable_contact_uid)
+    rs_uids: list[int] = []                        # RS part UIDs, one per iteration
 
     for i in range(1, COUNT + 1):
         # --- Accesses ---
-        a_reset    = u()
-        a_enable   = u()
-        a_bypass   = u()
-        a_en_st    = u()
-        a_cause    = u()
-        a_latch    = u()
-        a_csd      = u()
+        a_reset  = u()
+        a_enable = u()
+        a_bypass = u()
+        a_en_st  = u()
+        a_cause  = u()
+        a_latch  = u()
 
         # --- Parts ---
         p_c_reset  = u()
@@ -117,33 +121,30 @@ def _build_flgnet() -> str:
         p_coil_en  = u()
         p_c_cause  = u()
         p_rs       = u()
-        p_coil_csd = u()
 
         powerrail_targets.append((p_c_reset, p_c_enable))
+        rs_uids.append(p_rs)
 
-        # --- Wire UIDs (no per-iteration powerrail wire) ---
-        w_rst_op   = u()   # reset access → reset contact.operand
-        w_rst_r    = u()   # reset contact.out → rs.r
-        w_en_op    = u()   # enable access → enable contact.operand
-        w_en_bp    = u()   # enable contact.out → bypass contact.in
-        w_bp_op    = u()   # bypass access → bypass contact.operand
-        w_bp_coil  = u()   # bypass contact.out → en_status coil.in
-        w_enst_op  = u()   # en_status access → en_status coil.operand
-        w_coil_ca  = u()   # en_status coil.out → cause contact.in
-        w_ca_op    = u()   # cause access → cause contact.operand
-        w_ca_s1    = u()   # cause contact.out → rs.s1
-        w_latch_op = u()   # latch access → rs.operand
-        w_rs_coil  = u()   # rs.q → csd coil.in
-        w_csd_op   = u()   # csd access → csd coil.operand
+        # --- Per-iteration wire UIDs ---
+        w_rst_op  = u()
+        w_rst_r   = u()
+        w_en_op   = u()
+        w_en_bp   = u()
+        w_bp_op   = u()
+        w_bp_coil = u()
+        w_enst_op = u()
+        w_coil_ca = u()
+        w_ca_op   = u()
+        w_ca_s1   = u()
+        w_latch_op = u()
 
         parts += [
             _arr_access(a_reset,  "InterlockReset",        i),
-            _var_access(a_enable, f"Enable_Cause_{i}"),
+            _var_access(a_enable, _enable_cause_name(i)),
             _arr_access(a_bypass, "InterlockBypass",       i),
             _arr_access(a_en_st,  "InterlockEnableStatus", i),
             _var_access(a_cause,  f"Cause_{i}"),
             _arr_access(a_latch,  "InterlockLatchStatus",  i),
-            _var_access(a_csd,    "CSD"),
 
             f'    <Part Name="Contact" UId="{p_c_reset}" />',
             f'    <Part Name="Contact" UId="{p_c_enable}" />',
@@ -153,7 +154,6 @@ def _build_flgnet() -> str:
             f'    <Part Name="Coil" UId="{p_coil_en}" />',
             f'    <Part Name="Contact" UId="{p_c_cause}" />',
             f'    <Part Name="Rs" UId="{p_rs}" />',
-            f'    <Part Name="Coil" UId="{p_coil_csd}" />',
         ]
 
         wires += [
@@ -211,17 +211,45 @@ def _build_flgnet() -> str:
             f'      <IdentCon UId="{a_latch}" />\n'
             f'      <NameCon UId="{p_rs}" Name="operand" />\n'
             f'    </Wire>',
-
-            f'    <Wire UId="{w_rs_coil}">\n'
-            f'      <NameCon UId="{p_rs}" Name="q" />\n'
-            f'      <NameCon UId="{p_coil_csd}" Name="in" />\n'
-            f'    </Wire>',
-
-            f'    <Wire UId="{w_csd_op}">\n'
-            f'      <IdentCon UId="{a_csd}" />\n'
-            f'      <NameCon UId="{p_coil_csd}" Name="operand" />\n'
-            f'    </Wire>',
         ]
+
+    # --- OR block, CSD access, CSD coil (shared across all iterations) ---
+    a_csd      = u()
+    p_or       = u()
+    p_coil_csd = u()
+
+    parts += [
+        _var_access(a_csd, "CSD"),
+        f'    <Part Name="O" UId="{p_or}">\n'
+        f'      <TemplateValue Name="Card" Type="Cardinality">{COUNT}</TemplateValue>\n'
+        f'    </Part>',
+        f'    <Part Name="Coil" UId="{p_coil_csd}" />',
+    ]
+
+    # RS[i].q → OR.in{i}
+    for i, rs_uid in enumerate(rs_uids, 1):
+        w = u()
+        wires.append(
+            f'    <Wire UId="{w}">\n'
+            f'      <NameCon UId="{rs_uid}" Name="q" />\n'
+            f'      <NameCon UId="{p_or}" Name="in{i}" />\n'
+            f'    </Wire>'
+        )
+
+    # OR.out → CSD coil, CSD access → CSD coil operand
+    w_or_coil = u()
+    w_csd_op  = u()
+    wires += [
+        f'    <Wire UId="{w_or_coil}">\n'
+        f'      <NameCon UId="{p_or}" Name="out" />\n'
+        f'      <NameCon UId="{p_coil_csd}" Name="in" />\n'
+        f'    </Wire>',
+
+        f'    <Wire UId="{w_csd_op}">\n'
+        f'      <IdentCon UId="{a_csd}" />\n'
+        f'      <NameCon UId="{p_coil_csd}" Name="operand" />\n'
+        f'    </Wire>',
+    ]
 
     # Single powerrail wire fanning out to all reset + enable contacts
     w_pr = u()
